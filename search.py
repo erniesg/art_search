@@ -8,14 +8,8 @@ from lancedb.embeddings import EmbeddingFunctionRegistry
 import logging
 from collections import defaultdict
 import re
-import openpyxl
 import time
-import os
-from datetime import datetime
-from humanize import naturalsize  # for human-readable file sizes
-import torch  # Add to imports at top
-from tqdm import tqdm  # Add to imports
-import numpy as np
+from tqdm import tqdm
 
 # Create logs directory
 log_dir = Path("data/logs")
@@ -33,7 +27,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file, mode='w'),  # 'w' mode overwrites the file
+        logging.FileHandler(log_file, mode='w'),
         logging.StreamHandler()
     ]
 )
@@ -44,8 +38,8 @@ clip = registry.get("open-clip").create()
 
 # 2. Define data model with proper embedding function
 class Artwork(LanceModel):
-    vector: Vector(clip.ndims()) = clip.VectorField()  # Let CLIP define dimensions
-    image_uri: str = clip.SourceField()  # Automatically use CLIP for encoding
+    vector: Vector(clip.ndims()) = clip.VectorField()
+    image_uri: str = clip.SourceField()
     record_id: str
     accession_no: str
     artist: str
@@ -58,10 +52,43 @@ class Artwork(LanceModel):
     
     @property
     def image(self):
-        """Convenience property to open and return the image"""
         return Image.open(self.image_uri)
 
-# 3. Data loading and processing
+class ArtworkSearch:
+    def __init__(self):
+        self.table = None
+        self.db = None
+        
+    def initialize(self, image_dir: str, xlsx_path: str, force_new: bool = False):
+        """Initialize or get existing table"""
+        try:
+            self.db = lancedb.connect("~/.lancedb")
+            if force_new and "artworks" in self.db:
+                self.db["artworks"].delete()
+                logging.info("Deleted existing artworks table")
+            
+            self.table = create_or_get_table(image_dir, xlsx_path)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to initialize search: {e}")
+            return False
+    
+    def search(self, query=None, image_path=None, limit=8):
+        """Search artworks using text or image query"""
+        if not self.table:
+            raise RuntimeError("Search not initialized. Call initialize() first.")
+            
+        try:
+            if image_path:
+                query = Image.open(image_path)
+            
+            results = self.table.search(query).limit(limit).to_pydantic(Artwork)
+            return results
+            
+        except Exception as e:
+            logging.error(f"Search error: {e}")
+            return []
+
 def validate_data(image_dir: str, xlsx_path: str, save_log: bool = True):
     """Validates image files against metadata and logs discrepancies"""
     try:
@@ -265,108 +292,55 @@ def create_or_get_table(image_dir: str, xlsx_path: str, save_log: bool = True):
         logging.error(f"Error creating/getting table: {e}", exc_info=True)
         raise
 
-# 4. Search function
-def search_artworks(query, table, top_k=9):
-    """Search artworks using either text or image query"""
-    try:
-        results = table.search(query).limit(top_k).to_pydantic(Artwork)
-        return results
-    except Exception as e:
-        logging.error(f"Search error: {e}")
-        raise
+# Create global instance
+searcher = ArtworkSearch()
 
-def format_results(results) -> tuple[list[str], str]:
-    """Format search results for display"""
-    images = []
-    captions = []
-    for r in results:
-        if Path(r.image_uri).exists():
-            images.append(str(r.image_uri))
-            caption = (
-                f"Artist: {r.artist or 'Unknown'}\n"
-                f"Title: {r.title or 'Untitled'}\n"
-                f"Date: {r.date or 'Unknown'}\n"
-                f"Medium: {r.medium or 'Unknown'}\n"
-                f"Accession: {r.accession_no or 'Unknown'}"
-            )
-            captions.append(caption)
-    
-    return images, "\n\n---\n\n".join(captions) if captions else "No results found"
+# Interface functions for external use
+def initialize_search(image_dir: str, xlsx_path: str, force_new: bool = False):
+    """Initialize the search system"""
+    return searcher.initialize(image_dir, xlsx_path, force_new)
 
-def process_search(query=None, image_file=None):
-    """Process either text or image search input"""
-    try:
-        if query:
-            logging.info(f"Processing text search: {query}")
-            results = search_artworks(query, table)
-        elif image_file:
-            logging.info(f"Processing image search from file: {image_file}")
-            query_image = Image.open(image_file)
-            results = search_artworks(query_image, table)
-        else:
-            return []
-            
-        # Format results for display
-        gallery_items = []
-        for r in results:
-            if Path(r.image_uri).exists():
-                gallery_items.append({
-                    "image": r.image_uri,
-                    "title": r.title,
-                    "artist": r.artist,
-                    "date": r.date
-                })
-        return gallery_items
-            
-    except Exception as e:
-        logging.error(f"Search error: {e}", exc_info=True)
-        return []
+def search_artworks(query=None, image_path=None, limit=8):
+    """Search artworks - main interface for external use"""
+    return searcher.search(query=query, image_path=image_path, limit=limit)
 
-def test_searches(table):
-    """Run test searches using both text and image queries"""
-    print("\n=== Running Test Searches ===")
+def main():
+    """Main function for testing"""
+    IMAGE_DIR = "/home/erniesg/code/erniesg/lancedb_fasthtml_art_search/data/images"
+    XLSX_PATH = "/home/erniesg/code/erniesg/lancedb_fasthtml_art_search/data/metadata.xlsx"
     
-    # Test text search
-    print("\n1. Testing text search for 'pineapple'...")
-    text_results = table.search("pineapple").limit(9).to_pydantic(Artwork)
-    print(f"Found {len(text_results)} results")
-    for i, r in enumerate(text_results, 1):
-        print(f"\nResult {i}:")
-        print(f"Title: {r.title}")
-        print(f"Artist: {r.artist}")
-        print(f"Date: {r.date}")
-        print(f"Medium: {r.medium}")
-    
-    # Test image search
-    print("\n2. Testing image search with test.jpg...")
-    try:
-        test_image = Image.open("data/test.jpg")
-        image_results = table.search(test_image).limit(9).to_pydantic(Artwork)
-        print(f"Found {len(image_results)} results")
-        for i, r in enumerate(image_results, 1):
+    print("Loading database...")
+    if initialize_search(IMAGE_DIR, XLSX_PATH):
+        print("Database loaded successfully!")
+        
+        # Run test searches
+        print("\n=== Running Test Searches ===")
+        
+        # Test text search
+        print("\n1. Testing text search for 'pineapple'...")
+        text_results = search_artworks(query="pineapple")
+        for i, r in enumerate(text_results, 1):
             print(f"\nResult {i}:")
             print(f"Title: {r.title}")
             print(f"Artist: {r.artist}")
             print(f"Date: {r.date}")
-            print(f"Medium: {r.medium}")
-    except FileNotFoundError:
-        print("Test image not found at data/test.jpg")
-    except Exception as e:
-        print(f"Error during image search: {e}")
-    
-    print("\n=== Test Searches Complete ===\n")
-
-def main():
-    global table
-    
-    IMAGE_DIR = "/home/erniesg/code/erniesg/lanceart/data/images"
-    XLSX_PATH = "/home/erniesg/code/erniesg/lanceart/data/metadata.xlsx"
-    
-    print("Loading database...")
-    table = create_or_get_table(IMAGE_DIR, XLSX_PATH)
-    
-    # Run test searches before launching interface
-    test_searches(table)
+        
+        # Test image search
+        print("\n2. Testing image search...")
+        test_image = Path("data/test.jpg")
+        if test_image.exists():
+            image_results = search_artworks(image_path=test_image)
+            for i, r in enumerate(image_results, 1):
+                print(f"\nResult {i}:")
+                print(f"Title: {r.title}")
+                print(f"Artist: {r.artist}")
+                print(f"Date: {r.date}")
+        else:
+            print("Test image not found at data/test.jpg")
+            
+        print("\n=== Test Searches Complete ===\n")
+    else:
+        print("Failed to initialize database")
 
 if __name__ == "__main__":
     main()
