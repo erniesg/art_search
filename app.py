@@ -6,6 +6,7 @@ import tempfile
 # Initialize the search system at startup
 IMAGE_DIR = "data/images"
 XLSX_PATH = "data/metadata.xlsx"
+
 initialize_search(IMAGE_DIR, XLSX_PATH)
 
 app = FastHTML()
@@ -21,7 +22,7 @@ async def serve_image(filename: str):
 @app.get("/")
 def home():
     return Main(
-        H1('Artwork Search'),
+        H1('Cool Search by Ernie'),
         Form(
             Div(
                 Input(type="text", name="query", placeholder="Search by text..."),

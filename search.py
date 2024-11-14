@@ -54,6 +54,9 @@ class Artwork(LanceModel):
     def image(self):
         return Image.open(self.image_uri)
 
+# Add this near the top of the file with other constants
+FORCE_NEW_FLAG = Path("data/force_new_completed")
+
 class ArtworkSearch:
     def __init__(self):
         self.table = None
@@ -63,8 +66,10 @@ class ArtworkSearch:
         """Initialize or get existing table"""
         try:
             self.db = lancedb.connect("~/.lancedb")
-            if force_new and "artworks" in self.db:
-                self.db["artworks"].delete()
+            
+            # Only delete if force_new is True and flag doesn't exist
+            if force_new and not FORCE_NEW_FLAG.exists() and "artworks" in self.db:
+                self.db.drop_table("artworks")
                 logging.info("Deleted existing artworks table")
             
             self.table = create_or_get_table(image_dir, xlsx_path)
@@ -227,8 +232,8 @@ def clean_metadata_df(df):
     df = df.dropna(subset=['accession_no'])
     
     # Log sample data to verify cleaning
-    logging.info("\nSample cleaned metadata:")
-    logging.info(df.head().to_string())
+    # logging.info("\nSample cleaned metadata:")
+    # logging.info(df.head().to_string())
     
     return df
 
@@ -245,9 +250,10 @@ def create_or_get_table(image_dir: str, xlsx_path: str, save_log: bool = True):
         logging.info("Creating new artworks table...")
         
         # Get valid pairs first
-        if log_file.exists() and save_log:
-            logging.info("Found existing validation log, skipping validation...")
-            valid_pairs = []
+        valid_pairs = []
+        if log_file.exists() and valid_pairs_file.exists() and save_log:
+            # Only try to read from log if both files exist
+            logging.info("Found existing validation log, loading valid pairs...")
             with open(valid_pairs_file, 'r') as f:
                 for line in f:
                     if line.startswith("VALID ARTWORK-IMAGE PAIRS:") or line.startswith("-"):
@@ -257,6 +263,8 @@ def create_or_get_table(image_dir: str, xlsx_path: str, save_log: bool = True):
                         valid_pairs.append((acc_num, Path(image_dir) / img_path))
             logging.info(f"Loaded {len(valid_pairs)} valid pairs from validation log")
         else:
+            # Run validation if logs don't exist
+            logging.info("No existing validation logs found, running validation...")
             validation_start = time.time()
             valid_pairs, _, _, _ = validate_data(image_dir, xlsx_path, save_log=save_log)
             logging.info(f"Data validation time: {time.time() - validation_start:.2f} seconds")
@@ -309,9 +317,9 @@ def main():
     IMAGE_DIR = "/home/erniesg/code/erniesg/lancedb_fasthtml_art_search/data/images"
     XLSX_PATH = "/home/erniesg/code/erniesg/lancedb_fasthtml_art_search/data/metadata.xlsx"
     
-    print("Loading database...")
-    if initialize_search(IMAGE_DIR, XLSX_PATH):
-        print("Database loaded successfully!")
+    print("Creating new database index...")
+    if initialize_search(IMAGE_DIR, XLSX_PATH, force_new=True):
+        print("New database index created and loaded successfully!")
         
         # Run test searches
         print("\n=== Running Test Searches ===")
