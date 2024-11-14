@@ -44,7 +44,8 @@ async def search(query: str = None, image: UploadFile = None):
     if not query and not image:
         return P("Please provide either a text query or an image")
     
-    if image:
+    # Only process image if it was actually uploaded (has a filename)
+    if image and image.filename:
         # Save uploaded image to temp file and search
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             content = await image.read()
@@ -53,7 +54,7 @@ async def search(query: str = None, image: UploadFile = None):
             Path(tmp.name).unlink()  # Clean up temp file
     else:
         # Text search
-        results = search_artworks(query=query, limit=9)
+        results = search_artworks(query=query, limit=8)
     
     if not results:
         return P("No results found")
